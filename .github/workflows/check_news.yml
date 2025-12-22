@@ -1,0 +1,36 @@
+name: FFXIV News Checker
+
+on:
+  schedule:
+    - cron: '0 * * * *' # 每小時執行一次 (UTC 時間)
+  workflow_dispatch:      # 允許手動點擊執行
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+
+      - name: Run scraper
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python main.py
+
+      - name: Commit and push if news updated
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add last_news_title.txt
+          git commit -m "fix: Update news title" || exit 0
+          git push
