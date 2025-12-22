@@ -15,7 +15,7 @@ def send_to_discord(title, link, text_content):
         text_content = text_content[:3000] + "\n\n...(內容過長)"
 
     payload = {
-        "username": "FFXIV 公告小幫手",
+        "username": "FFXIV 光之工具人",
         "embeds": [{
             "title": title,
             "url": link,
