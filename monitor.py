@@ -8,17 +8,18 @@ from playwright.sync_api import sync_playwright
 webhook_raw = os.environ.get("DISCORD_WEBHOOK", "")
 DISCORD_WEBHOOK_URLS = [url.strip() for url in webhook_raw.split(",") if url.strip()]
 
-# 定義要檢查的分類與 Category 4 的黑名單
 CATEGORIES = [3, 4]
-CAT4_BLACKLIST = ["3", "46", "65"]  # 這些編號的公告會被略過
+# 黑名單 ID 清單 (字串格式)
+CAT4_BLACKLIST = ["3", "46", "65"]
 
 def send_to_discord(title, link, text_content):
     if not DISCORD_WEBHOOK_URLS:
         print("⚠️ 未設定 Discord Webhook")
         return
 
+    # Discord 限制 Embed description 為 4096 字
     if len(text_content) > 3000:
-        text_content = text_content[:3000] + "\n\n...(內容過長)"
+        text_content = text_content[:3000] + "\n\n...(內容過長，請點擊連結查看全文)"
 
     payload = {
         "username": "FFXIV 光之工具人",
@@ -26,13 +27,15 @@ def send_to_discord(title, link, text_content):
             "title": title,
             "url": link,
             "description": text_content,
-            "color": 3447003,
-            "footer": {"text": f"發送時間: {time.strftime('%Y-%m-%d %H:%M:%S')}"}
+            "color": 3447003
         }]
     }
 
     for url in DISCORD_WEBHOOK_URLS:
-        requests.post(url, json=payload)
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            print(f"發送失敗: {e}")
 
 def run_scraper():
     with sync_playwright() as p:
@@ -46,38 +49,64 @@ def run_scraper():
                 page.goto(url, timeout=60000)
                 page.wait_for_selector(".news_list .item")
 
-                # 抓取第一則公告
-                first_item = page.query_selector(".news_list .item")
-                news_id = first_item.query_selector(".news_id").inner_text().strip()
+                # 抓取該頁所有的公告項目
+                all_items = page.query_selector_all(".news_list .item")
 
-                # 針對 Category 4 的黑名單檢查
-                if cat == 4 and news_id in CAT4_BLACKLIST:
-                    print(f"⏩ 略過 Category 4 的黑名單編號: {news_id}")
+                target_item = None
+                target_id = None
+
+                # 尋找第一篇「不在黑名單內」的公告
+                for item in all_items:
+                    current_id = item.query_selector(".news_id").inner_text().strip()
+
+                    if cat == 4 and current_id in CAT4_BLACKLIST:
+                        print(f"⏩ 略過黑名單編號: {current_id}")
+                        continue
+
+                    # 找到第一篇合格的，就鎖定它並跳出迴圈
+                    target_item = item
+                    target_id = current_id
+                    break
+
+                if not target_item:
+                    print(f"分類 {cat} 在過濾後沒有可抓取的公告。")
                     continue
 
-                title = first_item.query_selector(".title a").inner_text().strip()
-                link = "https://www.ffxiv.com.tw" + first_item.query_selector(".title a").get_attribute("href")
+                # 取得標題與連結
+                title_link = target_item.query_selector(".title a")
+                title = title_link.inner_text().strip()
+                link = "https://www.ffxiv.com.tw" + title_link.get_attribute("href")
 
-                # 檢查更新 (每個分類獨立檔案)
+                # 檢查是否已更新過 (每個分類獨立檔案)
                 record_file = f"last_news_id_{cat}.txt"
                 if os.path.exists(record_file):
                     with open(record_file, "r", encoding="utf-8") as f:
-                        if f.read().strip() == news_id:
-                            print(f"😴 分類 {cat} 沒有新公告。")
+                        if f.read().strip() == target_id:
+                            print(f"😴 分類 {cat} 已是最新狀態 (ID: {target_id})。")
                             continue
 
-                # 進入內文抓取 .article
+                # 進入內文頁抓取 .article
+                print(f"🔔 發現新公告: {title} (ID: {target_id})")
                 page.goto(link, timeout=60000)
                 page.wait_for_selector(".article")
-                article_text = page.query_selector(".article").inner_text().strip()
-                formatted_text = re.sub(r'\n{3,}', '\n\n', article_text)
+
+                # 獲取 article 元素
+                article_element = page.query_selector(".article")
+
+                # 使用 inner_text() 並嘗試手動清理一些 HTML 殘留
+                # inner_text 會嘗試模仿瀏覽器渲染的排版（包含縮排）
+                article_text = article_element.inner_text().strip()
+
+                # 4. 包裹進代碼塊
+                formatted_text = f"```\n{article_text}\n```"
 
                 # 發送通知
-                send_to_discord(f"{title}", link, formatted_text)
+                category_name = "伺服器維護" if cat == 3 else "公告"
+                send_to_discord(f"[{category_name}] {title}", link, formatted_text)
 
-                # 更新紀錄 (存 ID 比存標題更準確)
+                # 更新紀錄檔
                 with open(record_file, "w", encoding="utf-8") as f:
-                    f.write(news_id)
+                    f.write(target_id)
 
             except Exception as e:
                 print(f"分類 {cat} 執行出錯: {e}")
